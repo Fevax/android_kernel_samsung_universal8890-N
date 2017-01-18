@@ -85,10 +85,6 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 
-// [ SEC_SELINUX_PORTING_COMMON
-#include <linux/delay.h>
-// ] SEC_SELINUX_PORTING_COMMON
-
 #include "avc.h"
 #include "objsec.h"
 #include "netif.h"
@@ -116,9 +112,9 @@ extern void rkp_free_security(unsigned long tsec);
 u8 rkp_ro_page(unsigned long addr);
 static inline unsigned int cmp_sec_integrity(const struct cred *cred,struct mm_struct *mm)
 {
-	return ((cred->bp_task != current) || 
+	return ((cred->bp_task != current) /*|| 
 			(mm && (!( in_interrupt() || in_softirq() || (preempt_count()& PREEMPT_ACTIVE))) && 
-			(mm->pgd != cred->bp_pgd)));
+			(mm->pgd != cred->bp_pgd))*/);
 			
 }
 extern struct cred init_cred;
@@ -181,44 +177,25 @@ extern struct security_operations *security_ops;
 /* SECMARK reference count */
 static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
 
-#ifdef CONFIG_SECURITY_SELINUX_DEVELOP
-RKP_RO_AREA int selinux_enforcing;
-
-static int __init enforcing_setup(char *str)
-{
-	unsigned long enforcing;
-	if (!kstrtoul(str, 0, &enforcing))
-// [ SEC_SELINUX_PORTING_COMMON
-#ifdef CONFIG_ALWAYS_ENFORCE
-		selinux_enforcing = 1;
-#else
-		selinux_enforcing = enforcing ? 1 : 0;
-#endif
-// ] SEC_SELINUX_PORTING_COMMON
-	return 1;
-}
-__setup("enforcing=", enforcing_setup);
-#endif
+int selinux_enforcing = 0;
 
 #ifdef CONFIG_SECURITY_SELINUX_BOOTPARAM
-RKP_RO_AREA int selinux_enabled = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
+int selinux_enabled = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
 
 static int __init selinux_enabled_setup(char *str)
 {
 	unsigned long enabled;
 	if (!kstrtoul(str, 0, &enabled))
-// [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 		selinux_enabled = 1;
 #else
 		selinux_enabled = enabled ? 1 : 0;
 #endif
-// ] SEC_SELINUX_PORTING_COMMON
 	return 1;
 }
 __setup("selinux=", selinux_enabled_setup);
 #else
-RKP_RO_AREA int selinux_enabled = 1;
+int selinux_enabled = 1;
 #endif
 
 static struct kmem_cache *sel_inode_cache;
@@ -301,9 +278,7 @@ static inline u32 cred_sid(const struct cred *cred)
 static inline u32 task_sid(const struct task_struct *task)
 {
 	u32 sid;
-#ifdef CONFIG_RKP_KDP
-	const struct task_security_struct *tsec;
-#endif
+
 	rcu_read_lock();
 #ifdef CONFIG_RKP_KDP
 	if(rkp_cred_enable) {
@@ -3263,25 +3238,6 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 	sid = cred_sid(cred);
 	isec = inode->i_security;
 
-// [ SEC_SELINUX_PORTING_COMMON
-	/* skip sid == 1(kernel), it means first boot time */
-	if(isec->initialized != 1 && sid != 1) {
-		int count = 5;
-
-		while(count-- > 0) {
-			printk(KERN_ERR "SELinux : inode->i_security is not initialized. waiting...(%d/5)\n", 5-count); 
-			udelay(500);
-			if(isec->initialized == 1) {
-				printk(KERN_ERR "SELinux : inode->i_security is INITIALIZED.\n"); 
-				break;
-			}
-		}
-		if(isec->initialized != 1) {
-			printk(KERN_ERR "SELinux : inode->i_security is not initialized. not fixed.\n"); 
-		}
-	}
-// ] SEC_SELINUX_PORTING_COMMON
-
 	rc = avc_has_perm_noaudit(sid, isec->sid, isec->sclass, perms, 0, &avd);
 	audited = avc_audit_required(perms, &avd, rc,
 				     from_access ? FILE__AUDIT_ACCESS : 0,
@@ -5699,13 +5655,11 @@ static int selinux_nlmsg_perm(struct sock *sk, struct sk_buff *skb)
 			       "SELinux: unrecognized netlink message:"
 			       " protocol=%hu nlmsg_type=%hu sclass=%hu\n",
 			       sk->sk_protocol, nlh->nlmsg_type, sksec->sclass);
-// [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 			if (security_get_allow_unknown())
 #else
 			if (!selinux_enforcing || security_get_allow_unknown())
 #endif
-// ] SEC_SELINUX_PORTING_COMMON
 				err = 0;
 		}
 
@@ -6972,7 +6926,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
 
 #endif
 
-RKP_RO_AREA static struct security_operations selinux_ops = {
+static struct security_operations selinux_ops = {
 	.name =				"selinux",
 
 	.binder_set_context_mgr =	selinux_binder_set_context_mgr,
@@ -7186,13 +7140,11 @@ RKP_RO_AREA static struct security_operations selinux_ops = {
 static __init int selinux_init(void)
 {
 	if (!security_module_enable(&selinux_ops)) {
-// [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 		selinux_enabled = 1;
 #else
 		selinux_enabled = 0;
 #endif
-// ] SEC_SELINUX_PORTING_COMMON
 		return 0;
 	}
 
@@ -7218,11 +7170,9 @@ static __init int selinux_init(void)
 
 	if (avc_add_callback(selinux_netcache_avc_callback, AVC_CALLBACK_RESET))
 		panic("SELinux: Unable to register AVC netcache callback\n");
-// [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 		selinux_enforcing = 1;
 #endif
-// ] SEC_SELINUX_PORTING_COMMON
 	if (selinux_enforcing)
 		printk(KERN_DEBUG "SELinux:  Starting in enforcing mode\n");
 	else
@@ -7294,11 +7244,9 @@ static struct nf_hook_ops selinux_nf_ops[] = {
 static int __init selinux_nf_ip_init(void)
 {
 	int err;
-// [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 		selinux_enabled = 1;
 #endif
-// ] SEC_SELINUX_PORTING_COMMON
 	if (!selinux_enabled)
 		return 0;
 
